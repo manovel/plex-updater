@@ -1,66 +1,85 @@
-import sre, urllib, urllib2, sys, BaseHTTPServer
-import os
+import sre, urllib, urllib2, sys, BaseHTTPServer, os
 from subprocess import call
+import logging
 
-script_root = '/usr/local/src/plex-updater'
-address = 'https://plex.tv/downloads'
+#Settings:
+plex_download_address = 'https://plex.tv/downloads'
+last_version_installed_fn = 'last_version_installed'
+logging.basicConfig(stream=sys.stdout, format='%(levelname)s: %(message)s', level=logging.DEBUG)
 
 def retrieveWebPage(address):
         try:
                 web_handle = urllib2.urlopen(address)
         except urllib2.HTTPError, e:
                 error_desc = BaseHTTPServer.BaseHTTPRequestHandler.responses[e.code][0]
-                #print "Cannot retrieve URL: " + str(e.code) + ": " + error_desc
-                print "Cannot retrieve URL: HTTP Error Code", e.code
+		logging.error(' '.join(['Cannot retrieve URL: HTTP Error Code', e.code]))
                 sys.exit(1)
         except urllib2.URLError, e:
-                print "Cannot retrieve URL: " + e.reason[1]
+                logging.error('Cannot retrieve URL: ' + e.reason[1])
                 sys.exit(1)
         except:
-                print "Cannot retrieve URL: unknown error"
+                logging.error('Cannot retrieve URL: unknown error')
                 sys.exit(1)
         return web_handle
 
-def loadLastVersion():
-	if os.path.isfile(script_root + '/last_version_installed') == False:
-		return 'no_version'
+def loadLastVersion(filename):
+	if os.path.isfile(filename) == False:
+		return '0'
 	else:
-		f = open(script_root + '/last_version_installed')
+		f = open(filename)
 		version = f.readlines()
 		f.close()
 		return version[0].rstrip()
 		
+# Find out script location:
+script_root = os.path.dirname(os.path.realpath(__file__))
 
-last_version = loadLastVersion()
-website_handle = retrieveWebPage(address)
-website_text = website_handle.read()
+# Do:
+last_version   = loadLastVersion(os.path.join(script_root, last_version_installed_fn))
+website_handle = retrieveWebPage(plex_download_address)
+website_text   = website_handle.read()
 
+logging.debug('Parsing download page')
 matches = sre.findall('<a href="(.*_i386.deb)"[^>]*>32-bit</a>', website_text)
 if len(matches)>1:
-	print "Error by parsing URL: too many matches"
+	logging.error('Parsing URL: too many matches')
 	sys.exit(1)
 
+logging.debug('Parsing package file URL')
 version = sre.findall('plexmediaserver_(.*)_i386.deb', matches[0])
 if len(version)>1:
-	print "Error by parsing URL: too many versions"
+	logging.error('Parsing package URL: too many versions')
 	sys.exit(1)
 
+logging.debug('Comparing versions')
 if last_version == version[0]:
-	print 'Alread up-to-date with version ' + version[0]
+	logging.info(version[0] + ': is already up-to-date')
 	sys.exit(0)
 else:
-	#Remove last installer
-	try:
-	    os.remove(script_root+'/plexmediaserver_' + last_version + '_i386.deb')
-	except OSError:
-	    pass
-	#Download new installer
-	urllib.urlretrieve(matches[0], filename= script_root+'/plexmediaserver_' + version[0] + '_i386.deb')
-	#install
-	ret=call(['dpkg', '-i', script_root+'/plexmediaserver_'+version[0]+'_i386.deb'])
+	# Remove last installer
+	if last_version != '0':
+		logging.debug('Removing last installer')
+		try:
+		    os.remove(os.path.join(script_root,'plexmediaserver_' + last_version + '_i386.deb'))
+		except OSError:
+		    logging.warning('Unable to remove old installer')
+
+	# Download new installer
+	logging.debug('Downloading new installer')
+	# TODO: catch exceptions
+	new_installer_fn = os.path.join(script_root,'plexmediaserver_' + version[0] + '_i386.deb')
+	urllib.urlretrieve(matches[0], filename = new_installer_fn)
+
+	# install
+	logging.debug('Installing new version')
+	# TODO: catch exceptions
+	ret=call(['dpkg', '-i', new_installer_fn])
+
 	#update latest file
+	logging.debug('Updating last version file')
+	# TODO: catch exceptions
 	if ret==0:
-		f = open(script_root + '/last_version_installed','w')
+		f = open(os.path.join(script_root, last_version_installed_fn),'w')
 		f.write(version[0])
 		f.close()
 
